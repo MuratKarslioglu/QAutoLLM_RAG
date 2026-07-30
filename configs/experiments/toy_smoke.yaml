@@ -1,0 +1,21 @@
+# Toy smoke-test config for the P3 gate (Brief §9): full budget run + resume
+# on a fully synthetic dataset, no GPU/network required. Run with:
+#   python scripts/run_experiment.py --config configs/experiments/toy_smoke.yaml
+experiment:
+  name: toy_smoke_p3
+  seed: 42
+  budget: 25
+  checkpoints: [10, 25]
+dataset:
+  id: toy                    # only backend wired up so far (Brief §12 Q2 still open)
+  optimization_split: toy_10
+  test_split: toy_10
+optimizer:
+  name: random                # random | tpe
+  init_points: 10
+generator:
+  model: fake-gen              # ignored in toy mode (uses a fake generator)
+  max_new_tokens: 64
+search_space: configs/search_spaces/rag_v2.yaml
+hardware:
+  max_vram_gb: 7.0

@@ -1,0 +1,21 @@
+# Same toy smoke-test as toy_smoke.yaml, but exercising the nsga2 baseline
+# (Brief P6) instead of random search. Run with:
+#   python -m scripts.run_experiment --config configs/experiments/toy_smoke_nsga2.yaml
+experiment:
+  name: toy_smoke_nsga2
+  seed: 42
+  budget: 24
+  checkpoints: [24]
+dataset:
+  id: toy
+  optimization_split: toy_10
+  test_split: toy_10
+optimizer:
+  name: nsga2
+  init_points: 8
+generator:
+  model: fake-gen
+  max_new_tokens: 64
+search_space: configs/search_spaces/rag_v2.yaml
+hardware:
+  max_vram_gb: 7.0

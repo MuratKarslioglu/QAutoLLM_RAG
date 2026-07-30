@@ -1,0 +1,41 @@
+# Real experiment config (Brief §7, §12 Q1/Q2 resolved), v3.
+#
+# v3: bumped after the 2026-07-18 faithfulness fix. main_hotpot_qkbo_v2's
+# results are usable for F1/EM/retrieval but its faithfulness axis is
+# near-degenerate (NLI-xsmall + bare terse answers -> ~0-1% entailment on
+# every single trial regardless of config, confirmed via a live A/B
+# investigation, not a real per-config signal). generator.model now points
+# at the ANSWER+EVIDENCE template (fresh generator_id -> fresh L4 cache
+# namespace, so this run cannot silently serve v2's stale/differently-
+# formatted cached answers) and nli.yaml's default model was swapped
+# xsmall -> base. max_new_tokens bumped 64 -> 96 to leave room for the
+# extra EVIDENCE sentence without truncating it.
+#
+# Needs a GPU and `python -m scripts.prepare_hotpotqa` run first (already
+# done if v2 was run — L1/L2/corpus prep is dataset-level, not tied to
+# generator/template, so that cache carries over). This is the user's
+# manual trial, same as v2 was.
+#   python -m scripts.run_experiment --config configs/experiments/main_hotpot_v3.yaml
+# or, for the full multi-optimizer campaign:
+#   python -m scripts.run_real_ablation --config configs/experiments/main_hotpot_v3.yaml --output-dir results/main_hotpot_v3
+experiment:
+  name: main_hotpot_v3
+  seed: 42
+  budget: 100
+  checkpoints: [25, 50, 100]
+dataset:
+  id: hotpotqa
+  optimization_split: opt_100
+  test_split: test_300
+optimizer:
+  name: qkernel_bo                 # random | tpe | nsga2 | structured_bo | qkernel_bo
+  init_points: 10
+  quantum:
+    shots: null                    # null = statevector
+    feature_map_depth: 1
+generator:
+  model: qwen2.5-3b-instruct-4bit-evidence
+  max_new_tokens: 96
+search_space: configs/search_spaces/rag_v2.yaml
+hardware:
+  max_vram_gb: 7.0

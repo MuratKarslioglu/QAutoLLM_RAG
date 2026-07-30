@@ -1,0 +1,68 @@
+# Search space definition for the main RAG configuration space (Brief §7).
+# Variable order below is the canonical order used to build z-vectors and
+# group slices — do not reorder without re-checking every hash/cache key.
+
+variables:
+  - name: chunking_strategy
+    kind: categorical
+    group: G1_chunking
+    values: [fixed, sentence, semantic]
+
+  - name: chunk_size
+    kind: discrete_numeric
+    group: G1_chunking
+    values: [256, 384, 512, 768]
+
+  - name: chunk_overlap
+    kind: discrete_numeric
+    group: G1_chunking
+    values: [0, 32, 64, 96]
+
+  - name: embedding_model
+    kind: categorical
+    group: G2_embedding
+    values: [bge-small, e5-base, gte-small]
+
+  - name: top_k
+    kind: discrete_numeric
+    group: G3_retrieval
+    values: [3, 5, 8, 10]
+
+  - name: hybrid_on
+    kind: binary
+    group: G3_retrieval
+    values: [0, 1]
+
+  - name: dense_weight
+    kind: discrete_numeric
+    group: G3_retrieval
+    values: [0.3, 0.5, 0.7, 0.9]
+    condition:
+      depends_on: hybrid_on
+      active_when: 1
+
+  - name: reranker_on
+    kind: binary
+    group: G4_reranking
+    values: [0, 1]
+
+  - name: reranker_top_n
+    kind: discrete_numeric
+    group: G4_reranking
+    values: [3, 5, 8]
+    condition:
+      depends_on: reranker_on
+      active_when: 1
+
+  - name: context_budget
+    kind: discrete_numeric
+    group: G5_context
+    values: [1024, 1536, 2048]
+
+groups:
+  # fixed iteration order — must match qautollm.space.groups.GROUP_ORDER
+  - G1_chunking
+  - G2_embedding
+  - G3_retrieval
+  - G4_reranking
+  - G5_context

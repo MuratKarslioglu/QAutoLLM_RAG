@@ -1,0 +1,26 @@
+# Generator models, keyed by the name used in experiment YAML's
+# generator.model field. Matches the example in Brief §7.
+qwen2.5-3b-instruct-4bit:
+  hf_id: Qwen/Qwen2.5-3B-Instruct
+  quantization: 4bit
+  prompt_template_id: qwen_chat
+
+# Same underlying model/weights, only the prompt template differs (two
+# worked examples). Distinct catalog name -> distinct generator_id -> a
+# separate L4 cache namespace, so switching to this one never risks
+# serving stale/contaminated cached answers from the base entry. Opt in by
+# setting `generator.model: qwen2.5-3b-instruct-4bit-fewshot` in an
+# experiment config.
+qwen2.5-3b-instruct-4bit-fewshot:
+  hf_id: Qwen/Qwen2.5-3B-Instruct
+  quantization: 4bit
+  prompt_template_id: qwen_chat_fewshot
+
+# Same weights, ANSWER+EVIDENCE structured template (2026-07-18 faithfulness
+# fix). Distinct catalog name -> distinct generator_id -> fresh L4 cache
+# namespace, same "never silently reuse a differently-formatted cached
+# answer" discipline as the fewshot entry above.
+qwen2.5-3b-instruct-4bit-evidence:
+  hf_id: Qwen/Qwen2.5-3B-Instruct
+  quantization: 4bit
+  prompt_template_id: qwen_chat_evidence

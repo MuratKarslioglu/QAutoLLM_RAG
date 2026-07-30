@@ -1,0 +1,12 @@
+# Short name (as used in rag_v2.yaml's embedding_model domain) -> HF repo id.
+# Defaults picked for small footprint / no gating / CPU-friendly (Brief §12 Q1
+# leaves the exact IDs open — override here if Murat wants different ones).
+bge-small:
+  hf_id: BAAI/bge-small-en-v1.5
+  dim: 384
+e5-base:
+  hf_id: intfloat/e5-base-v2
+  dim: 768
+gte-small:
+  hf_id: thenlper/gte-small
+  dim: 384

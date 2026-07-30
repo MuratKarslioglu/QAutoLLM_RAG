@@ -1,0 +1,5 @@
+# Cross-encoder rerankers. "default" is the only one used by rag_v2.yaml's
+# reranker_on flag; kept as a catalog (not a bare string) so a second variant
+# can be added later without changing the schema.
+default:
+  hf_id: cross-encoder/ms-marco-MiniLM-L-6-v2

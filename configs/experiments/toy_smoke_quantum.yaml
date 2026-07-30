@@ -1,0 +1,26 @@
+# Same toy smoke-test as toy_smoke.yaml, but exercising qkernel_bo (Brief
+# P5) instead of random search. Small budget: real EHVI-guided quantum-
+# kernel BO suggestions do a GP fit per trial, so this is slower per-trial
+# than random/tpe. Run with:
+#   python -m scripts.run_experiment --config configs/experiments/toy_smoke_quantum.yaml
+experiment:
+  name: toy_smoke_qkernel
+  seed: 42
+  budget: 12
+  checkpoints: [12]
+dataset:
+  id: toy                    # only backend wired up so far (Brief §12 Q2 still open)
+  optimization_split: toy_10
+  test_split: toy_10
+optimizer:
+  name: qkernel_bo
+  init_points: 10
+  quantum:
+    shots: null              # null = exact statevector simulation
+    feature_map_depth: 1
+generator:
+  model: fake-gen              # ignored in toy mode (uses a fake generator)
+  max_new_tokens: 64
+search_space: configs/search_spaces/rag_v2.yaml
+hardware:
+  max_vram_gb: 7.0

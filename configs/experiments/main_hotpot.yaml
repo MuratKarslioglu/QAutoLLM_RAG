@@ -1,0 +1,32 @@
+# Real experiment config (Brief §7, §12 Q1/Q2 now resolved): needs a GPU
+# and `python -m scripts.prepare_hotpotqa` run first. This is the user's
+# manual trial — real Qwen2.5-3B-Instruct download + GPU 4-bit inference,
+# not something run automatically.
+#   python -m scripts.prepare_hotpotqa --n-opt 100 --n-test 300
+#   python -m scripts.run_experiment --config configs/experiments/main_hotpot.yaml
+experiment:
+  # v2: bumped after the 2026-07-15 chat-template/prompt fix — the old
+  # main_hotpot_qkbo run_dir's L4 (generation) cache is contaminated with
+  # pre-fix rambling answers and would be served silently on any resume/rerun
+  # of that same name (generator_id/prompt_template_id didn't change, so the
+  # L4 cache key didn't either). Reusing that run_dir gives stale results.
+  name: main_hotpot_qkbo_v2
+  seed: 42
+  budget: 100
+  checkpoints: [25, 50, 100]
+dataset:
+  id: hotpotqa
+  optimization_split: opt_100
+  test_split: test_300
+optimizer:
+  name: qkernel_bo                 # random | tpe | nsga2 | structured_bo | qkernel_bo
+  init_points: 10
+  quantum:
+    shots: null                    # null = statevector
+    feature_map_depth: 1
+generator:
+  model: qwen2.5-3b-instruct-4bit
+  max_new_tokens: 64
+search_space: configs/search_spaces/rag_v2.yaml
+hardware:
+  max_vram_gb: 7.0

@@ -1,0 +1,16 @@
+# NLI model used by evaluation/faithfulness.py to score answer-vs-context
+# entailment. Brief D1 allows the reranker + NLI model to co-reside with
+# the generator as long as they're small (~0.5GB each).
+#
+# 2026-07-18: xsmall was found to score real HotpotQA entailment cases at
+# ~0.0 confidence even for fully-correct, well-formed declarative sentences
+# with the exact supporting fact present in the premise (verified against a
+# tautology control that correctly scored 1.0, and a negative control with
+# the supporting fact removed that correctly scored ~0 -- xsmall itself was
+# just too weak, not miscalibrated). `base` was A/B tested live against the
+# same cases and correctly resolved both a single-hop and a genuine
+# multi-hop (two-document, pronoun-coreference) case at >0.99 confidence,
+# while still correctly rejecting the missing-evidence negative control.
+# Still small enough (~370MB) to co-reside with the generator (Brief D1).
+default:
+  hf_id: cross-encoder/nli-deberta-v3-base

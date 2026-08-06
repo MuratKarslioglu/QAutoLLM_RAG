@@ -38,6 +38,7 @@ clipped mass (sum of |negative eigenvalues|) is exposed via
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 from collections.abc import Callable
 
 import numpy as np
@@ -46,6 +47,29 @@ import torch
 from gpytorch.kernels import Kernel
 
 MAX_QUBITS = 5  # Brief D3
+
+# Statevectors are 2**n_qubits complex128 each (256 B at Brief D3's 5-qubit
+# cap, 16 MiB at run_qubit_sweep_extended.py's 20-qubit exploratory
+# override). _statevector_cache used to grow unboundedly for the lifetime
+# of the optimizer -- harmless at 5 qubits, but a single 20-qubit BO run
+# evaluates thousands of distinct candidate points during acquisition
+# optimization and drove RSS past 29 GB, tripping the OOM killer
+# (2026-08-03). This budget bounds cache memory regardless of n_qubits by
+# deriving maxsize from the actual per-entry size.
+_CACHE_BUDGET_BYTES = 512 * 1024 * 1024
+
+# A second, independent memory blowup (2026-08-04, real 20-qubit run):
+# GPyTorch broadcasts/tiles the training set to match a candidate batch's
+# leading dimension before calling forward() -- a real BO iteration with 128
+# candidates and 10 training points asked this kernel for 128*10 = 1280
+# statevector rows, of which only 10 were actually distinct. The old
+# forward()/_statevectors materialized one full 2**20-complex128 row (16
+# MiB) per *requested* row regardless of duplicates -- a single 20 GiB
+# `np.empty` call for that one acquisition-scoring pass. forward() below
+# instead computes the small n_unique x n_unique overlap matrix once and
+# fancy-indexes *that* (real scalars, not 16 MiB statevectors) back up to
+# the full requested shape -- mathematically identical result, but the
+# expensive 2**n_qubits-wide dimension never touches the duplicated axis.
 
 
 def _n_qubits(dim: int, max_qubits: int = MAX_QUBITS) -> int:
@@ -110,23 +134,42 @@ class QuantumFidelityKernel(Kernel):
         self.seed = seed
         self.last_psd_clipped_mass = 0.0
         self._circuit = _build_circuit(self.n_qubits, depth, device_name=device_name)
-        self._statevector_cache: dict[bytes, np.ndarray] = {}
+        itemsize = np.dtype(np.complex128).itemsize * (2**self.n_qubits)
+        self._cache_maxsize = max(1, _CACHE_BUDGET_BYTES // itemsize)
+        self._statevector_cache: OrderedDict[bytes, np.ndarray] = OrderedDict()
 
-    def _statevectors(self, z_batch: np.ndarray) -> np.ndarray:
-        """One circuit evaluation per unique point, cached by content —
-        this kernel has no learnable parameters, so the same z always
-        yields the same statevector regardless of which GP-fit iteration
-        or how many times it's queried.
+    def _unique_statevectors(self, z_batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """One circuit evaluation per *unique* point in ``z_batch``, cached
+        by content across calls — this kernel has no learnable parameters,
+        so the same z always yields the same statevector regardless of
+        which GP-fit iteration or how many times it's queried. Bounded LRU
+        (see ``_CACHE_BUDGET_BYTES``): evicts the least-recently-used entry
+        once full instead of growing without limit.
+
+        Returns ``(unique_statevectors, inverse)`` where ``inverse[i]`` is
+        the row of ``unique_statevectors`` corresponding to ``z_batch[i]``
+        — deliberately *not* ``unique_statevectors[inverse]`` pre-expanded
+        back to ``z_batch``'s original row count. Callers should fancy-
+        index whatever *small* result they compute from the unique rows
+        (e.g. forward()'s overlap matrix) rather than re-expanding these
+        statevectors themselves, which is exactly the allocation that blew
+        up to 20 GiB for one real 20-qubit acquisition-scoring batch (see
+        module-level comment above ``_CACHE_BUDGET_BYTES``).
         """
-        out = np.empty((z_batch.shape[0], 2**self.n_qubits), dtype=np.complex128)
-        for i, z in enumerate(z_batch):
+        unique_z, inverse = np.unique(z_batch, axis=0, return_inverse=True)
+        out = np.empty((unique_z.shape[0], 2**self.n_qubits), dtype=np.complex128)
+        for i, z in enumerate(unique_z):
             key = z.tobytes()
             cached = self._statevector_cache.get(key)
             if cached is None:
                 cached = np.asarray(self._circuit(z))
                 self._statevector_cache[key] = cached
+                if len(self._statevector_cache) > self._cache_maxsize:
+                    self._statevector_cache.popitem(last=False)
+            else:
+                self._statevector_cache.move_to_end(key)
             out[i] = cached
-        return out
+        return out, inverse.reshape(-1)
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **params):
         x1_np = x1.detach().cpu().numpy()
@@ -138,17 +181,26 @@ class QuantumFidelityKernel(Kernel):
         batch_shape1, n1, d1 = x1_np.shape[:-2], x1_np.shape[-2], x1_np.shape[-1]
         batch_shape2, n2, d2 = x2_np.shape[:-2], x2_np.shape[-2], x2_np.shape[-1]
 
-        psi1 = self._statevectors(x1_np.reshape(-1, d1)).reshape(*batch_shape1, n1, -1)
+        psi1_u, inv1 = self._unique_statevectors(x1_np.reshape(-1, d1))
         if is_training_gram:
-            psi2 = psi1
+            psi2_u, inv2 = psi1_u, inv1
         else:
-            psi2 = self._statevectors(x2_np.reshape(-1, d2)).reshape(*batch_shape2, n2, -1)
+            psi2_u, inv2 = self._unique_statevectors(x2_np.reshape(-1, d2))
+
+        # Small (n_unique1 x n_unique2) matrix of real work; expanding
+        # *this* back up to the full batch via inv1/inv2 below is cheap
+        # (real/complex scalars), unlike expanding the 2**n_qubits-wide
+        # statevectors that produced it would be.
+        overlap_u = psi1_u @ psi2_u.conj().T
 
         if diag:
-            fidelity = np.abs(np.einsum("...ik,...ik->...i", psi1, psi2.conj())) ** 2
+            idx1 = inv1.reshape(*batch_shape1, n1)
+            idx2 = inv2.reshape(*batch_shape2, n2)
+            fidelity = np.abs(overlap_u[idx1, idx2]) ** 2
         else:
-            overlap = np.einsum("...ik,...jk->...ij", psi1, psi2.conj())
-            fidelity = np.abs(overlap) ** 2
+            idx1 = inv1.reshape(*batch_shape1, n1, 1)
+            idx2 = inv2.reshape(*batch_shape2, 1, n2)
+            fidelity = np.abs(overlap_u[idx1, idx2]) ** 2
 
         if self.shots is not None:
             noise_seed = _hash_seed(x1_np.tobytes(), x2_np.tobytes(), base_seed=self.seed)

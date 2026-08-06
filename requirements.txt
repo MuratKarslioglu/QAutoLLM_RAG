@@ -6,6 +6,7 @@ matplotlib>=3.8
 tqdm>=4.66
 pyyaml>=6.0
 pydantic>=2.5
+psutil>=5.9           # host RAM probing (qautollm.utils.profiling.ram_probe)
 
 # --- LLM / RAG stack ---
 torch>=2.2            # CUDA build must be installed separately first; see README
@@ -26,6 +27,11 @@ botorch>=0.11         # EHVI acquisition
 # --- quantum stack ---
 pennylane>=0.37
 pennylane-lightning>=0.37
+# GPU-accelerated statevector backend (cuStateVec) for scripts.run_qubit_sweep_extended's
+# exploratory sweep on hosts with a CUDA GPU -- optional, code falls back to CPU
+# (lightning.qubit) via qautollm.utils.profiling.lightning_gpu_available() if unavailable.
+pennylane-lightning-gpu>=0.37; sys_platform == "linux"
+custatevec-cu12>=1.14; sys_platform == "linux"
 
 # --- dev / quality ---
 pytest>=8.0

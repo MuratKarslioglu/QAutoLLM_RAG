@@ -95,6 +95,41 @@ def vram_probe() -> dict[str, Any]:
     }
 
 
+def ram_probe() -> dict[str, float]:
+    """Host RAM (GB), analogous to :func:`vram_probe` for the GPU side.
+
+    ``available_gb`` (not ``total_gb``) is what callers should budget
+    against: it already accounts for buffers/cache the kernel will
+    reclaim under pressure, matching what ``free -h``'s "available" column
+    reports.
+    """
+    import psutil
+
+    vm = psutil.virtual_memory()
+    return {
+        "total_gb": vm.total / (1024**3),
+        "available_gb": vm.available / (1024**3),
+    }
+
+
+def lightning_gpu_available() -> bool:
+    """Whether PennyLane's ``lightning.gpu`` (cuStateVec-backed) device can
+    actually be constructed on this host -- used by
+    ``scripts.run_qubit_sweep_extended`` to auto-select a GPU-accelerated
+    scale instead of failing at device-construction time inside a worker
+    process. Cheap: constructing a 1-wire device just checks the CUDA/
+    cuStateVec runtime is loadable, it doesn't allocate anything sized by
+    the caller's real circuit.
+    """
+    try:
+        import pennylane as qml
+
+        qml.device("lightning.gpu", wires=1)
+        return True
+    except Exception:  # noqa: BLE001 - any import/runtime failure means "not available"
+        return False
+
+
 def disk_probe(path: str | Path = ".") -> dict[str, float]:
     """Free/used/total disk space (GB) for the filesystem holding ``path``.
 

@@ -17,6 +17,8 @@ all 5 optimizers at 1 seed. Override with ``--optimizers``/``--seeds`` for
 a different scope.
 
 Stages (each individually skippable):
+    0. one-time HotpotQA download+subset,  (scripts.prepare_hotpotqa)
+       only if data/hotpotqa is missing    -> data/hotpotqa
     1. real HotpotQA campaign (N seeds x    (scripts.run_real_ablation)
        given optimizers) + main/seed-stats  (scripts.export_results)
        tables                               -> results/main_hotpot_v3
@@ -46,11 +48,19 @@ import sys
 import time
 from pathlib import Path
 
+from tqdm import tqdm
+
 from qautollm.utils.logging import add_file_logging, get_logger
 
 _logger = get_logger(__name__)
 
 _RULE = "=" * 72
+
+# Same file `_build_hotpotqa_evaluator` (scripts/run_experiment.py) checks
+# before raising FileNotFoundError -- used here to auto-run the one-time
+# prepare_hotpotqa download/subset stage instead of making the user chase
+# the error message down manually.
+_HOTPOTQA_DATASET_FILE = Path("data/hotpotqa/dataset.json")
 
 # Every stage below inherits this process's stdio and streams live to
 # whatever terminal launched the pipeline -- fine while someone is watching,
@@ -75,7 +85,12 @@ def _stage_end(name: str, t0: float) -> None:
     _logger.info("STAGE DONE: %s (%.1fs = %.2fh)", name, elapsed, elapsed / 3600)
 
 
-def _run(cmd: list[str], stage_name: str) -> None:
+def _run(cmd: list[str], stage_name: str, overall: tqdm | None = None) -> None:
+    if overall is not None:
+        # Short label only -- the full stage_name (with seeds/paths) still
+        # goes to the log via _stage_start; the bar just needs to fit on
+        # one terminal line alongside the running stage's own tqdm bars.
+        overall.set_description(f"pipeline [{stage_name.split(' -> ')[0].split(' (')[0]}]")
     t0 = _stage_start(stage_name)
     _logger.info("$ %s", " ".join(cmd))
     # pipefail so a failing stage's exit code survives the `| tee`, not tee's own.
@@ -89,8 +104,12 @@ def _run(cmd: list[str], stage_name: str) -> None:
             result.returncode,
             _PIPELINE_LOG,
         )
+        if overall is not None:
+            overall.close()
         raise SystemExit(result.returncode)
     _stage_end(stage_name, t0)
+    if overall is not None:
+        overall.update(1)
 
 
 def main() -> int:
@@ -119,6 +138,27 @@ def main() -> int:
         help="seeds for the main campaign (default: 3, the minimum for the paired "
         "Wilcoxon significance test in scripts.export_results). Pass a single seed "
         "for a quick single-seed run.",
+    )
+    parser.add_argument(
+        "--n-opt",
+        type=int,
+        default=100,
+        help="scripts.prepare_hotpotqa --n-opt, used only if data/hotpotqa hasn't "
+        "been prepared yet (default: 100, matches README)",
+    )
+    parser.add_argument(
+        "--n-test",
+        type=int,
+        default=300,
+        help="scripts.prepare_hotpotqa --n-test, used only if data/hotpotqa hasn't "
+        "been prepared yet (default: 300, matches README)",
+    )
+    parser.add_argument(
+        "--skip-prepare-hotpotqa",
+        action="store_true",
+        help="don't auto-run scripts.prepare_hotpotqa even if data/hotpotqa is "
+        "missing -- the main campaign will then fail with its own "
+        "FileNotFoundError instead",
     )
     parser.add_argument(
         "--quick-synth-and-qubit",
@@ -158,6 +198,55 @@ def main() -> int:
 
     pipeline_t0 = time.monotonic()
 
+    need_prepare_hotpotqa = (
+        not args.skip_main_campaign
+        and not args.skip_prepare_hotpotqa
+        and not _HOTPOTQA_DATASET_FILE.exists()
+    )
+
+    # Number of subprocess stages that will actually run, given the --skip-*
+    # flags -- drives the overall (macro) progress bar below. Each stage's
+    # own tqdm bars (trial-level, epoch-level, etc.) still stream through
+    # untouched; this one just tracks how far through the *pipeline* we are.
+    n_stages = (
+        int(need_prepare_hotpotqa)
+        + (2 if not args.skip_main_campaign else 0)  # campaign + export
+        + int(not args.skip_synth)
+        + int(not args.skip_qubit_sweep)
+        + int(not args.skip_extended_qubit_sweep)
+        + int(not args.skip_figures)
+    )
+    overall = tqdm(
+        total=n_stages,
+        desc="pipeline",
+        unit="stage",
+        position=0,
+        leave=True,
+        dynamic_ncols=True,
+    )
+
+    # -- 0: one-time HotpotQA download/subset, only if data/hotpotqa is missing
+    if need_prepare_hotpotqa:
+        _run(
+            [
+                py,
+                "-m",
+                "scripts.prepare_hotpotqa",
+                "--n-opt",
+                str(args.n_opt),
+                "--n-test",
+                str(args.n_test),
+            ],
+            "prepare HotpotQA dataset (one-time download+subset)",
+            overall=overall,
+        )
+    elif not args.skip_main_campaign:
+        _logger.info(
+            "%s already exists -- skipping prepare_hotpotqa (pass --skip-prepare-hotpotqa "
+            "to always skip, or delete data/hotpotqa to force a fresh download)",
+            _HOTPOTQA_DATASET_FILE,
+        )
+
     # -- 1: main real-dataset campaign (N seeds) + main/seed-stats tables ---
     if not args.skip_main_campaign:
         cmd = [
@@ -175,7 +264,11 @@ def main() -> int:
         ]
         if args.resume:
             cmd.append("--resume")
-        _run(cmd, f"real ablation campaign (seeds={args.seeds}) -> {output_root}")
+        _run(
+            cmd,
+            f"real ablation campaign (seeds={args.seeds}) -> {output_root}",
+            overall=overall,
+        )
 
         export_cmd = [
             py,
@@ -188,7 +281,11 @@ def main() -> int:
         ]
         if len(args.seeds) > 1:
             export_cmd.append("--seed-stats")
-        _run(export_cmd, "export main table (+ seed-stats/significance if >1 seed)")
+        _run(
+            export_cmd,
+            "export main table (+ seed-stats/significance if >1 seed)",
+            overall=overall,
+        )
     else:
         _logger.info("skipping main campaign (--skip-main-campaign)")
 
@@ -197,7 +294,7 @@ def main() -> int:
         cmd = [py, "-m", "scripts.run_synth", "--output-dir", str(synth_dir)]
         if args.quick_synth_and_qubit:
             cmd.append("--quick")
-        _run(cmd, f"synthetic Layer-A sweep -> {synth_dir}")
+        _run(cmd, f"synthetic Layer-A sweep -> {synth_dir}", overall=overall)
     else:
         _logger.info("skipping synthetic Layer-A sweep (--skip-synth)")
 
@@ -206,7 +303,7 @@ def main() -> int:
         cmd = [py, "-m", "scripts.run_qubit_sweep", "--output-dir", str(qubit_dir)]
         if args.quick_synth_and_qubit:
             cmd.append("--quick")
-        _run(cmd, f"qubit-count sweep -> {qubit_dir}")
+        _run(cmd, f"qubit-count sweep -> {qubit_dir}", overall=overall)
     else:
         _logger.info("skipping qubit-count sweep (--skip-qubit-sweep)")
 
@@ -221,7 +318,11 @@ def main() -> int:
         ]
         if args.quick_synth_and_qubit:
             cmd.append("--quick")
-        _run(cmd, f"extended qubit-count sweep (5/10/15/20) -> {extended_qubit_dir}")
+        _run(
+            cmd,
+            f"extended qubit-count sweep (5/10/15/20) -> {extended_qubit_dir}",
+            overall=overall,
+        )
     else:
         _logger.info("skipping extended qubit sweep (--skip-extended-qubit-sweep)")
 
@@ -242,10 +343,12 @@ def main() -> int:
                 "results/paper",
             ],
             "paper tables + figures",
+            overall=overall,
         )
     else:
         _logger.info("skipping paper figures (--skip-figures)")
 
+    overall.close()
     total = time.monotonic() - pipeline_t0
     _logger.info(_RULE)
     _logger.info("FULL PIPELINE DONE in %.1fs (%.2fh)", total, total / 3600)

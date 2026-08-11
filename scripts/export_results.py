@@ -166,10 +166,45 @@ def build_seed_aggregated_table(trials: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+_SUPPORTED_METRICS = ("hypervolume", "mean_f1", "mean_faithfulness", "mean_latency_s")
+
+
+def _per_seed_metric(
+    trials: pd.DataFrame, optimizer_name: str, metric: str, ref_point: np.ndarray
+) -> dict[int, float]:
+    """Same per-seed aggregation :func:`build_seed_aggregated_table` uses,
+    for one optimizer/metric -- shared by :func:`compare_optimizers_paired`
+    so the significance test is computed on *exactly* the numbers the
+    seed-stats table reports, not a re-derivation that could silently
+    drift from it.
+    """
+    sub = trials[trials["optimizer_name"] == optimizer_name]
+    out: dict[int, float] = {}
+    for seed, group in sub.groupby("seed"):
+        ok = group[group["status"] == "ok"]
+        if not len(ok):
+            out[seed] = 0.0 if metric == "hypervolume" else float("nan")
+            continue
+        if metric == "hypervolume":
+            archive = ParetoArchive()
+            for obj in ok[_OBJECTIVE_COLUMNS].to_numpy():
+                archive.update(obj)
+            out[seed] = archive.hypervolume(ref_point)
+        elif metric == "mean_f1":
+            out[seed] = -ok["objective_f1"].mean()
+        elif metric == "mean_faithfulness":
+            out[seed] = -ok["objective_faithfulness"].mean()
+        elif metric == "mean_latency_s":
+            out[seed] = ok["objective_latency_s"].mean()
+        else:
+            raise ValueError(f"unsupported metric {metric!r}; expected one of {_SUPPORTED_METRICS}")
+    return out
+
+
 def compare_optimizers_paired(
-    trials: pd.DataFrame, optimizer_a: str, optimizer_b: str
+    trials: pd.DataFrame, optimizer_a: str, optimizer_b: str, metric: str = "hypervolume"
 ) -> dict[str, float | int | str]:
-    """Paired Wilcoxon signed-rank test on per-seed hypervolume between two
+    """Paired Wilcoxon signed-rank test on a per-seed metric between two
     optimizers (same shared reference point, same seeds -- Brief §5.2's
     paired-comparison design already guarantees seeds line up 1:1). This is
     the statistic the paper's headline classical-vs-quantum claim needs: a
@@ -177,35 +212,37 @@ def compare_optimizers_paired(
     of seeds) can't say whether an observed gap is signal or noise, and eye-
     balling two close numbers is not a substitute for a significance test.
 
+    ``metric`` defaults to ``"hypervolume"`` (the paper's primary claim);
+    ``"mean_f1"``/``"mean_faithfulness"``/``"mean_latency_s"`` let the same
+    test be run per-metric -- needed once hypervolume and a component
+    metric disagree in direction (2026-08-09 real campaign: qkernel_bo
+    ahead on mean_f1, behind on both mean_faithfulness and hypervolume) and
+    that disagreement itself needs its own significance number rather than
+    just eyeballing the main table.
+
     Returns ``n_seeds`` plus (once ``n_seeds >= 3``, scipy's own floor for a
     non-degenerate two-sided Wilcoxon test) ``statistic``/``p_value`` and
-    the mean paired hypervolume difference (``a`` minus ``b``); with fewer
-    seeds the test is left out (``statistic``/``p_value`` are ``None``)
-    rather than reporting a meaningless number.
+    the mean paired difference (``a`` minus ``b``); with fewer seeds the
+    test is left out (``statistic``/``p_value`` are ``None``) rather than
+    reporting a meaningless number.
     """
     if trials.empty:
-        return {"optimizer_a": optimizer_a, "optimizer_b": optimizer_b, "n_seeds": 0}
+        return {
+            "optimizer_a": optimizer_a,
+            "optimizer_b": optimizer_b,
+            "metric": metric,
+            "n_seeds": 0,
+        }
 
     ref_point = _shared_reference_point(trials)
-
-    def _per_seed_hv(optimizer_name: str) -> dict[int, float]:
-        sub = trials[trials["optimizer_name"] == optimizer_name]
-        out = {}
-        for seed, group in sub.groupby("seed"):
-            ok = group[group["status"] == "ok"]
-            archive = ParetoArchive()
-            for obj in ok[_OBJECTIVE_COLUMNS].to_numpy():
-                archive.update(obj)
-            out[seed] = archive.hypervolume(ref_point) if len(ok) else 0.0
-        return out
-
-    hv_a = _per_seed_hv(optimizer_a)
-    hv_b = _per_seed_hv(optimizer_b)
-    shared_seeds = sorted(set(hv_a) & set(hv_b))
+    vals_a = _per_seed_metric(trials, optimizer_a, metric, ref_point)
+    vals_b = _per_seed_metric(trials, optimizer_b, metric, ref_point)
+    shared_seeds = sorted(set(vals_a) & set(vals_b))
 
     result: dict[str, float | int | str] = {
         "optimizer_a": optimizer_a,
         "optimizer_b": optimizer_b,
+        "metric": metric,
         "n_seeds": len(shared_seeds),
     }
     if len(shared_seeds) < 3:
@@ -214,8 +251,8 @@ def compare_optimizers_paired(
         result["mean_diff_a_minus_b"] = float("nan")
         return result
 
-    a_vals = np.array([hv_a[s] for s in shared_seeds])
-    b_vals = np.array([hv_b[s] for s in shared_seeds])
+    a_vals = np.array([vals_a[s] for s in shared_seeds])
+    b_vals = np.array([vals_b[s] for s in shared_seeds])
     diffs = a_vals - b_vals
     if np.all(diffs == 0):
         # scipy.stats.wilcoxon raises on an all-zero-difference sample
@@ -286,6 +323,63 @@ def make_convergence_plot(trials: pd.DataFrame, output_path: str | Path) -> None
     plt.close(fig)
 
 
+def make_seed_variance_plot(trials: pd.DataFrame, output_path: str | Path) -> None:
+    """Per-seed hypervolume, one marker per seed per optimizer plus a
+    mean +/- std bar -- the seed-to-seed spread a bare mean+std table can't
+    show at a glance, and what a reader needs to sanity-check a paired
+    significance claim (:func:`compare_optimizers_paired`) visually rather
+    than just trusting a p-value.
+    """
+    output_path = Path(output_path)
+    if trials.empty:
+        return
+    ref_point = _shared_reference_point(trials)
+
+    per_seed_hv: dict[str, dict[int, float]] = {}
+    for optimizer_name, group in trials.groupby("optimizer_name"):
+        per_seed_hv[optimizer_name] = {}
+        for seed, seed_group in group.groupby("seed"):
+            ok = seed_group[seed_group["status"] == "ok"]
+            archive = ParetoArchive()
+            for obj in ok[_OBJECTIVE_COLUMNS].to_numpy():
+                archive.update(obj)
+            per_seed_hv[optimizer_name][seed] = archive.hypervolume(ref_point) if len(ok) else 0.0
+
+    optimizers = sorted(per_seed_hv)
+    if not optimizers:
+        return
+
+    rng = np.random.default_rng(0)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for i, optimizer_name in enumerate(optimizers):
+        values = np.array(list(per_seed_hv[optimizer_name].values()))
+        jitter = (rng.random(len(values)) - 0.5) * 0.15
+        color = f"C{i}"
+        ax.scatter(np.full(len(values), i) + jitter, values, alpha=0.6, color=color, zorder=2)
+        ax.errorbar(
+            [i],
+            [values.mean()],
+            yerr=[values.std()],
+            fmt="_",
+            color=color,
+            markersize=20,
+            capsize=6,
+            elinewidth=2,
+            zorder=3,
+        )
+
+    n_seeds = len(next(iter(per_seed_hv.values())))
+    ax.set_xticks(range(len(optimizers)))
+    ax.set_xticklabels(optimizers)
+    ax.set_ylabel("hypervolume (per seed)")
+    ax.set_title(f"Per-seed hypervolume (n={n_seeds} seeds)")
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", action="append", required=True, help="repeatable")
@@ -312,24 +406,32 @@ def main() -> int:
         seed_table = build_seed_aggregated_table(trials)
         export_table(seed_table, output_dir / "main_table_seed_stats.md", fmt="markdown")
         export_table(seed_table, output_dir / "main_table_seed_stats.csv", fmt="csv")
-        _logger.info("wrote seed-aggregated table to %s", output_dir)
+        make_seed_variance_plot(trials, output_dir / "hypervolume_by_seed.png")
+        _logger.info("wrote seed-aggregated table + per-seed variance plot to %s", output_dir)
         print(seed_table.to_string(index=False))
 
         optimizers_present = set(trials["optimizer_name"].unique())
         if {"structured_bo", "qkernel_bo"} <= optimizers_present:
-            comparison = compare_optimizers_paired(trials, "qkernel_bo", "structured_bo")
+            comparisons = {
+                metric: compare_optimizers_paired(
+                    trials, "qkernel_bo", "structured_bo", metric=metric
+                )
+                for metric in _SUPPORTED_METRICS
+            }
             comparison_path = output_dir / "qkernel_vs_structured_significance.json"
             comparison_path.parent.mkdir(parents=True, exist_ok=True)
-            comparison_path.write_text(json.dumps(comparison, indent=2))
-            _logger.info(
-                "qkernel_bo vs structured_bo (paired Wilcoxon, n_seeds=%d): "
-                "p_value=%s, mean_diff=%s -- wrote %s",
-                comparison["n_seeds"],
-                comparison.get("p_value"),
-                comparison.get("mean_diff_a_minus_b"),
-                comparison_path,
-            )
-            print(json.dumps(comparison, indent=2))
+            comparison_path.write_text(json.dumps(comparisons, indent=2))
+            for metric, comparison in comparisons.items():
+                _logger.info(
+                    "qkernel_bo vs structured_bo on %s (paired Wilcoxon, n_seeds=%d): "
+                    "p_value=%s, mean_diff=%s",
+                    metric,
+                    comparison["n_seeds"],
+                    comparison.get("p_value"),
+                    comparison.get("mean_diff_a_minus_b"),
+                )
+            _logger.info("wrote %s", comparison_path)
+            print(json.dumps(comparisons, indent=2))
     return 0
 
 

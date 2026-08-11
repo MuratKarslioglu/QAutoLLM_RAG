@@ -71,7 +71,15 @@ def run_real_ablation(
     splits = load_hotpotqa_splits(Path("data/hotpotqa"))
     test_query_ids = splits[base_config.dataset.test_split]
 
+    # Merge into any pre-existing report instead of overwriting it: a
+    # second invocation with a *different* (e.g. additional) set of seeds
+    # -- the normal way to grow a paper-strength seed count without
+    # re-running seeds that already finished -- would otherwise silently
+    # drop every previously-recorded seed's entries from this file.
+    report_path = output_dir / "test_split_report.json"
     test_report: dict[str, list[dict[str, Any]]] = {}
+    if report_path.exists():
+        test_report = json.loads(report_path.read_text())
     for seed in seeds:
         seed_suffix = f"_seed{seed}" if multi_seed else ""
         seed_dir = output_dir / f"seed{seed}" if multi_seed else output_dir
@@ -107,7 +115,6 @@ def run_real_ablation(
                 db, experiment_name, search_space, evaluator, query_set_id, test_query_ids
             )
 
-    report_path = output_dir / "test_split_report.json"
     report_path.write_text(json.dumps(test_report, indent=2))
     _logger.info("wrote test-split Pareto-front report to %s", report_path)
     _logger.info(

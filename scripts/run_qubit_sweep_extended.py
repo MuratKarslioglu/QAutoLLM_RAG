@@ -41,6 +41,29 @@ import os
 # worker recycling insufficient -- see HARDWARE_SCALE and _TRIM_EVERY below).
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 
+# This host's GPU setup is unreliable for these runs (see GPU_SCALE's
+# comments) and device_name defaults to lightning.qubit (CPU) everywhere in
+# this file -- torch never needs the GPU here. Left visible, torch still
+# probes it lazily (e.g. the first .backward() call) and that probe itself
+# fails on this machine ("CUDA initialization: ... cudaGetDeviceCount() ...
+# out of memory", a driver-level failure, not a real OOM), printing a noisy
+# UserWarning on every worker. Hiding the device up front makes
+# torch.cuda.is_available() return False immediately without ever touching
+# the driver, so the probe -- and its failure -- never happens. Must be set
+# before torch is imported anywhere below (directly or via qautollm), same
+# reasoning as MALLOC_ARENA_MAX above; spawned workers inherit it from
+# os.environ.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+import logging
+
+# torch.utils.cpp_extension logs "No CUDA runtime is found, using
+# CUDA_HOME=..." at WARNING level the moment anything imports it, purely
+# because CUDA_HOME/nvcc is present on this system while torch.cuda.
+# is_available() is False (now unconditionally, per the above) -- harmless
+# here since nothing in this file JIT-compiles a CUDA extension.
+logging.getLogger("torch.utils.cpp_extension").setLevel(logging.ERROR)
+
 import argparse
 import itertools
 import multiprocessing as mp

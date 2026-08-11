@@ -11,6 +11,7 @@ from scripts.export_results import (
     export_table,
     load_trials,
     make_convergence_plot,
+    make_seed_variance_plot,
 )
 
 
@@ -199,3 +200,46 @@ def test_compare_optimizers_paired_handles_identical_values_without_crashing():
 def test_compare_optimizers_paired_empty_input():
     result = compare_optimizers_paired(pd.DataFrame(), "qkernel_bo", "structured_bo")
     assert result["n_seeds"] == 0
+
+
+def test_compare_optimizers_paired_supports_non_hypervolume_metrics():
+    # mean_f1 favors qkernel_bo here while hypervolume (driven by the shared
+    # 0.1 latency/0.1 faithfulness columns _row() fixes) would not
+    # necessarily agree -- the 2026-08-09 real campaign hit exactly this
+    # disagreement (qkernel_bo ahead on mean_f1, behind on hypervolume), so
+    # the significance test needs to be checkable per metric, not just on
+    # hypervolume.
+    rows = _multi_seed_rows("qkernel_bo", {0: 0.9, 1: 0.85, 2: 0.95}) + _multi_seed_rows(
+        "structured_bo", {0: 0.5, 1: 0.4, 2: 0.45}
+    )
+    result = compare_optimizers_paired(
+        pd.DataFrame(rows), "qkernel_bo", "structured_bo", metric="mean_f1"
+    )
+    assert result["metric"] == "mean_f1"
+    assert result["n_seeds"] == 3
+    assert result["mean_diff_a_minus_b"] > 0
+
+
+def test_compare_optimizers_paired_rejects_unknown_metric():
+    rows = _multi_seed_rows("qkernel_bo", {0: 0.9, 1: 0.85, 2: 0.95}) + _multi_seed_rows(
+        "structured_bo", {0: 0.5, 1: 0.4, 2: 0.45}
+    )
+    with pytest.raises(ValueError, match="unsupported metric"):
+        compare_optimizers_paired(
+            pd.DataFrame(rows), "qkernel_bo", "structured_bo", metric="not_a_metric"
+        )
+
+
+def test_make_seed_variance_plot_writes_png(tmp_path: Path):
+    rows = _multi_seed_rows("qkernel_bo", {0: 0.9, 1: 0.85, 2: 0.95}) + _multi_seed_rows(
+        "structured_bo", {0: 0.5, 1: 0.4, 2: 0.45}
+    )
+    path = tmp_path / "hypervolume_by_seed.png"
+    make_seed_variance_plot(pd.DataFrame(rows), path)
+    assert path.exists()
+
+
+def test_make_seed_variance_plot_handles_empty_trials(tmp_path: Path):
+    path = tmp_path / "hypervolume_by_seed.png"
+    make_seed_variance_plot(pd.DataFrame(), path)
+    assert not path.exists()

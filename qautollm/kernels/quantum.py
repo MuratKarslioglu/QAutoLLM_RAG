@@ -79,6 +79,36 @@ def _n_qubits(dim: int, max_qubits: int = MAX_QUBITS) -> int:
     return n
 
 
+# Per-layer frequency multiplier for the RY re-uploading angle (2026-08-11).
+# Every group in this project's search spaces (Brief §5's categorical
+# variables) one-hot-encodes to z in {0, 1}. RY(pi * k) for any integer k is,
+# up to an irrelevant global phase, one of only two operators (k even -> I,
+# k odd -> RY(pi)) -- both Clifford, as is CZ. Re-uploading the *same*
+# RY(pi*z) angle every layer therefore builds a fixed Clifford unitary raised
+# to the depth-th power, which has a finite, small period: a real
+# scripts/run_depth_qubit_grid.py run confirmed depth=10 and depth=20 collapse
+# back to depth=0's exact state (bit-for-bit identical downstream BO
+# trajectories), even though generic (non-one-hot) z inputs never repeat.
+# This is a data-reuploading expressivity bug, not a quantum finding.
+#
+# Fix: scale each layer's angle by a distinct multiplier so RY(pi*freq*z)
+# stops landing on an integer multiple of pi for z=1 once depth > 1 -- the
+# standard "Fourier-series" reuploading construction (Schuld, Sweke & Meyer,
+# 2021), which is also independently motivated as increasing the accessible
+# frequency spectrum with depth, not just a periodicity patch. freq=1.0 for
+# the first layer keeps depth=1 (every production qkernel_bo caller's only
+# configuration, incl. the completed main_hotpot_v3 campaign) byte-identical
+# to the pre-fix circuit; only depth > 1 -- exploratory-sweep-only territory
+# -- changes.
+_LAYER_FREQ_STEP = 0.6180339887498949  # golden ratio conjugate: irrational,
+# so no integer combination of layer frequencies is itself an integer,
+# which is what ultimately kills the exact revival.
+
+
+def _layer_frequency(layer: int) -> float:
+    return 1.0 if layer == 0 else 1.0 + layer * _LAYER_FREQ_STEP
+
+
 def _build_circuit(
     n_qubits: int, depth: int, device_name: str = "default.qubit"
 ) -> Callable[[np.ndarray], np.ndarray]:
@@ -86,9 +116,10 @@ def _build_circuit(
 
     @qml.qnode(device)
     def circuit(z: np.ndarray) -> np.ndarray:
-        for _ in range(depth):
+        for layer in range(depth):
+            freq = _layer_frequency(layer)
             for i in range(n_qubits):
-                qml.RY(np.pi * z[i % len(z)], wires=i)
+                qml.RY(np.pi * freq * z[i % len(z)], wires=i)
             for i in range(n_qubits - 1):
                 qml.CZ(wires=[i, i + 1])
         return qml.state()

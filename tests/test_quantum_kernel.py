@@ -145,3 +145,56 @@ def test_psd_projection_only_applies_to_square_training_gram():
     with torch.no_grad():
         kernel.forward(train_x, candidates)
     assert kernel.last_psd_clipped_mass == 0.0
+
+
+def test_depth_1_matches_the_pre_fix_single_ry_layer_formula():
+    """2026-08-11 regression guard: the per-layer frequency multiplier added
+    to fix the Clifford-periodicity bug (see _build_circuit's module-level
+    comment) must be a no-op at depth=1 -- the only depth any production
+    caller (incl. the completed, 51-hour main_hotpot_v3 real campaign) ever
+    uses. If this ever breaks, every already-published real-task result is
+    silently invalidated.
+    """
+    import pennylane as qml
+
+    def pre_fix_circuit(n_qubits: int, z: np.ndarray) -> np.ndarray:
+        device = qml.device("default.qubit", wires=n_qubits)
+
+        @qml.qnode(device)
+        def circuit(z):
+            for i in range(n_qubits):
+                qml.RY(np.pi * z[i % len(z)], wires=i)
+            for i in range(n_qubits - 1):
+                qml.CZ(wires=[i, i + 1])
+            return qml.state()
+
+        return np.asarray(circuit(z))
+
+    from qautollm.kernels.quantum import _build_circuit
+
+    rng = np.random.default_rng(3)
+    z = rng.uniform(-1, 1, size=4)
+    expected = pre_fix_circuit(4, z)
+    actual = np.asarray(_build_circuit(4, depth=1)(z))
+    assert np.allclose(expected, actual, atol=1e-12)
+
+
+def test_one_hot_categorical_inputs_no_longer_revive_at_depth_10_or_20():
+    """2026-08-11: with the one-hot categorical z that every real search
+    space in this project produces, RY(pi * z) is Clifford for both z=0 and
+    z=1, so re-uploading the *same* angle every layer made the depth-10 and
+    depth-20 circuits collapse back to depth=0's exact state (a real
+    scripts/run_depth_qubit_grid.py run showed bit-identical downstream BO
+    trajectories at those three depths). The per-layer irrational frequency
+    multiplier must break this: none of depth={5,10,15,20}'s output states
+    may exactly equal depth=0's for a one-hot z.
+    """
+    from qautollm.kernels.quantum import _build_circuit
+
+    n_qubits = 5
+    one_hot = np.eye(n_qubits)[1]  # z = [0, 1, 0, 0, 0]
+    depth0 = np.asarray(_build_circuit(n_qubits, depth=0)(one_hot))
+    for depth in (5, 10, 15, 20):
+        psi = np.asarray(_build_circuit(n_qubits, depth)(one_hot))
+        fidelity = abs(np.vdot(depth0, psi)) ** 2
+        assert fidelity < 0.999, f"depth={depth} revived to depth=0's state (fidelity={fidelity})"

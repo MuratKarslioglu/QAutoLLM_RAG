@@ -1,0 +1,38 @@
+{
+  "hypervolume": {
+    "optimizer_a": "qkernel_bo",
+    "optimizer_b": "structured_bo",
+    "metric": "hypervolume",
+    "n_seeds": 10,
+    "statistic": 5.0,
+    "p_value": 0.01953125,
+    "mean_diff_a_minus_b": -0.0006551164428578215
+  },
+  "mean_f1": {
+    "optimizer_a": "qkernel_bo",
+    "optimizer_b": "structured_bo",
+    "metric": "mean_f1",
+    "n_seeds": 10,
+    "statistic": 7.0,
+    "p_value": 0.037109375,
+    "mean_diff_a_minus_b": 0.00878736300746133
+  },
+  "mean_faithfulness": {
+    "optimizer_a": "qkernel_bo",
+    "optimizer_b": "structured_bo",
+    "metric": "mean_faithfulness",
+    "n_seeds": 10,
+    "statistic": 1.0,
+    "p_value": 0.00390625,
+    "mean_diff_a_minus_b": -0.015995860530080033
+  },
+  "mean_latency_s": {
+    "optimizer_a": "qkernel_bo",
+    "optimizer_b": "structured_bo",
+    "metric": "mean_latency_s",
+    "n_seeds": 10,
+    "statistic": 20.0,
+    "p_value": 0.4921875,
+    "mean_diff_a_minus_b": 0.0013135172729918487
+  }
+}

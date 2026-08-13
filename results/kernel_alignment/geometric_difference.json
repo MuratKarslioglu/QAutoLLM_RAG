@@ -1,0 +1,37 @@
+{
+  "n_points": 100,
+  "sqrt_n": 10.0,
+  "feature_map_depth": 1,
+  "per_objective": [
+    {
+      "objective": "f1",
+      "g_classical_to_quantum": 6.773179258743723,
+      "g_classical_to_quantum_over_sqrt_n": 0.6773179258743723,
+      "g_quantum_to_classical": 91.90513324894756,
+      "g_quantum_to_classical_over_sqrt_n": 9.190513324894756,
+      "classical_effective_rank": 68,
+      "quantum_effective_rank": 41,
+      "n_points": 100
+    },
+    {
+      "objective": "faithfulness",
+      "g_classical_to_quantum": 1.3121024012025435,
+      "g_classical_to_quantum_over_sqrt_n": 0.13121024012025434,
+      "g_quantum_to_classical": 21.699848585951365,
+      "g_quantum_to_classical_over_sqrt_n": 2.1699848585951367,
+      "classical_effective_rank": 67,
+      "quantum_effective_rank": 32,
+      "n_points": 100
+    },
+    {
+      "objective": "latency_s",
+      "g_classical_to_quantum": 14.334212070709954,
+      "g_classical_to_quantum_over_sqrt_n": 1.4334212070709955,
+      "g_quantum_to_classical": 59.565687065010934,
+      "g_quantum_to_classical_over_sqrt_n": 5.956568706501093,
+      "classical_effective_rank": 68,
+      "quantum_effective_rank": 44,
+      "n_points": 100
+    }
+  ]
+}

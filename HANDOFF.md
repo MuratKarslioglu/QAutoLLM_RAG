@@ -33,3 +33,27 @@ with `git rm HANDOFF.md` in the first commit of the next session.
   commands in README "Results".
 - Caches (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `*.egg-info`) are
   disposable and git-ignored; re-run `pip install -e .` if the package is not importable.
+
+## Moving to a new machine
+Source machine used Python 3.12.3 (`pyproject.toml` requires >=3.11). Copy the
+whole folder except `.venv/` (keep `.git/`, `data/`, `results/` incl. the
+git-ignored `results/main_hotpot_v3/seed*/` and `_shared/` raw DBs).
+
+```bash
+cd QAutoLLM_RAG
+python3 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install torch --index-url https://download.pytorch.org/whl/cu121   # only if a GPU is present; match driver
+pip install -r requirements.txt     # requirements.lock is the exact freeze from the old machine
+pip install -e .
+python scripts/check_env.py
+pytest -q -m "not slow"             # expect 271 passed (~4 min)
+git status                          # should be clean; no hard-coded absolute paths exist in the repo
+```
+- Hugging Face models/datasets are NOT in the folder (`~/.cache/huggingface`,
+  37 GB on the old machine). They re-download on first use, and are only
+  needed to run new real experiments, not to write the paper or regenerate tables.
+- Regenerating tables needs the raw DBs: `python -m scripts.export_results ...`
+  (see README "Results"). Without them, the tracked CSV/JSON in `results/` suffice.
+- Remote `origin` = github.com/MuratKarslioglu/QAutoLLM_RAG; local `main` was
+  not pushed as of this handoff — check `git status -sb`.

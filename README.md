@@ -1,11 +1,26 @@
 # QAutoLLM-RAG
 
 Budget-aware, multi-objective optimization of RAG pipeline configurations
-using classical and quantum-kernel Bayesian Optimization. Software artifact
-for the paper's core question: under what conditions does a
-group-decomposed quantum fidelity kernel BO surrogate outperform an
-identically-structured classical Matérn kernel BO surrogate, on a mixed,
-conditional configuration space and a small evaluation budget?
+using classical and quantum-kernel Bayesian Optimization. This is the
+software artifact for *"Do Quantum Fidelity Kernels Help Bayesian
+Optimization of RAG Pipelines? A Controlled, Multi-Regime Study"*
+(manuscript: [`paper/manuscript.md`](paper/manuscript.md)), which asks:
+under what conditions does a group-decomposed quantum fidelity kernel BO
+surrogate outperform an identically-structured classical Matérn kernel BO
+surrogate, on a mixed, conditional configuration space and a small
+evaluation budget?
+
+Two optimizers share every line of code (init design, GP fitting, EHVI
+acquisition, Pareto tracking) except the kernel factory
+(`qautollm/kernels/classical.py` vs. `qautollm/kernels/quantum.py`), so any
+measured difference is attributable to the kernel alone. Across a real
+HotpotQA campaign (n=10 seeds), two qubit-count sweeps, a circuit-depth
+sweep, and a synthetic benchmark, the paper reports a well-powered,
+mechanistically-explained **negative result**: no quantum advantage on the
+primary multi-objective metric in any regime tested. See
+[`paper/deliverables/`](paper/deliverables/) for the full set of result
+figures/tables and [`paper/manuscript.md`](paper/manuscript.md) for the
+complete writeup.
 
 Full design spec: `QAutoLLM_Implementation_Brief.md`.
 
@@ -82,7 +97,12 @@ python -m scripts.prepare_hotpotqa --n-opt 100 --n-test 300
 
 # real run: downloads Qwen2.5-3B-Instruct (~6GB) + real embedding/reranker/
 # NLI models on first use, needs a CUDA GPU (Brief hardware target: 8GB VRAM)
-python -m scripts.run_experiment --config configs/experiments/main_hotpot.yaml
+python -m scripts.run_experiment --config configs/experiments/main_hotpot_v3.yaml
+
+# full multi-seed, multi-optimizer campaign (what the manuscript's §5.1 reports):
+python -m scripts.run_real_ablation --config configs/experiments/main_hotpot_v3.yaml \
+    --output-dir results/main_hotpot_v3 --optimizers structured_bo qkernel_bo \
+    --seeds 42 43 44 45 46 47 48 49 50 51
 ```
 
 **Performance note**: `scripts/build_index.py` pre-builds all
@@ -106,9 +126,59 @@ The image only covers the CPU-only toy-set path (see `docker/Dockerfile`'s
 header comment) — it does not install a CUDA torch build or request GPU
 passthrough.
 
+## Results
+
+All published tables/figures are generated from the raw experiment
+databases under `results/` — nothing in the manuscript is hand-entered.
+
+```bash
+# regenerate the real-campaign main table + significance tests from the
+# tracked results/main_hotpot_v3/ artifacts
+python -m scripts.export_results --db results/main_hotpot_v3/_shared/db.sqlite \
+    --output-dir results/main_hotpot_v3 --seed-stats
+
+# regenerate the Holm correction + held-out (test_300) replication check
+# reported in manuscript §5.2.1
+python -m scripts.compute_publication_stats
+
+# regenerate every publication-ready PNG table/figure under paper/deliverables/
+python paper/deliverables/_render_tables.py
+```
+
+Camera-ready figures/tables live in
+[`paper/deliverables/`](paper/deliverables/); the underlying CSV/JSON they
+were rendered from are tracked under `results/`. The raw per-seed databases
+(`results/main_hotpot_v3/seed*/`, `_shared/`, ~1.9 GB) and `data/` are
+git-ignored; regenerate them with the commands above.
+
+## Project structure
+
+```
+qautollm/          core library (search space, kernels, optimizers, RAG
+                    pipeline, evaluation, artifact store)
+scripts/           entry points — run experiments, sweeps, and export
+                    results/figures from a finished run
+configs/            experiment / model / search-space YAML configs
+tests/              pytest suite (`pytest -q -m "not slow"`)
+docs/architecture.md  orientation for reading the codebase
+paper/manuscript.md    the manuscript this repo is the artifact for
+paper/deliverables/    camera-ready figures/tables cited by the manuscript
+results/            raw + aggregated output of every reported experiment
+QAutoLLM_Implementation_Brief.md   full design spec
+```
+
 ## Project status
 
-All 8 build phases (Brief §9) are implemented and gated:
+**Code and experiments: complete.** All 8 build phases (Brief §9) are
+implemented and gated by the test suite (`pytest -q -m "not slow"`), and
+every experiment reported in the manuscript has run to completion — the real
+10-seed HotpotQA campaign (seeds 42–51), both qubit-count sweeps, the depth
+sweep / depth×qubit grid, the synthetic Layer-A sweep, and the kernel
+geometric-difference diagnostic. No compute is pending.
+
+**Manuscript: working draft.** Results sections (§5.1–5.6) and Discussion
+are final; Introduction, Related Work, Limitations and the appendices still
+carry prose `[TODO]`s (`grep TODO paper/manuscript.md`).
 
 | Phase | What | Gate |
 |---|---|---|
@@ -121,8 +191,26 @@ All 8 build phases (Brief §9) are implemented and gated:
 | P7 | Layer-A synthetic benchmark, run_synth.py | full sweep (interaction x conditionality x dim) with plots |
 | P8 | ablation, export_results, Dockerfile | docker build + one command reproduces the toy-set main table |
 
-Brief §12 is resolved: model IDs confirmed (`configs/models/*.yaml`),
-HotpotQA is downloaded/prepared by `scripts/prepare_hotpotqa.py`. What's
-still outstanding is *running* the real (GPU-backed, multi-GB download)
-experiment campaign — that's the user's manual step, same pattern used
-throughout this project for anything heavy/environment-dependent.
+Brief §12 is resolved: model IDs are in `configs/models/*.yaml` and HotpotQA
+is prepared by `scripts/prepare_hotpotqa.py`.
+
+## Citation
+
+The manuscript is currently a working draft under preparation for
+submission; venue/DOI below will be filled in once available.
+
+```bibtex
+@article{karslioglu_qautollm_rag,
+  title   = {Do Quantum Fidelity Kernels Help Bayesian Optimization of
+             RAG Pipelines? A Controlled, Multi-Regime Study},
+  author  = {Karsl{\i}o{\u{g}}lu, Murat},
+  year    = {2026},
+  note    = {Working draft},
+  journal = {[TODO: fill in on acceptance]},
+  doi     = {[TODO: fill in on acceptance]},
+}
+```
+
+## Contact
+
+Murat Karslıoğlu — [GitHub @MuratKarslioglu](https://github.com/MuratKarslioglu)

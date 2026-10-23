@@ -1,6 +1,6 @@
 # Do Quantum Fidelity Kernels Help Bayesian Optimization of RAG Pipelines? A Controlled, Multi-Regime Study
 
-*Working draft — 2026-08-13. All experimental sections (§5.1–5.6) are now
+*Working draft — 2026-10-23. All experimental sections (§5.1–5.6) are now
 filled in with real, completed results. Remaining `[TODO]`s are prose-only
 (Introduction, Related Work, Limitations, Conclusion) — outlined but not
 yet written out; no pending compute.*
@@ -16,9 +16,14 @@ depth sweep (0–20 re-uploading layers), and a synthetic multi-group
 benchmark, we find no quantum advantage on the primary multi-objective
 metric (hypervolume) in any regime — and on the real task, the classical
 kernel is *significantly* ahead (paired Wilcoxon, p=0.0195, n=10). The
-picture is not uniformly negative, though: the quantum kernel is
-significantly *better* on one component objective (F1, p=0.037) and
-significantly *worse* on another (faithfulness, p=0.0039). A geometric-
+picture is not uniformly negative, though: on the optimization-split
+component objectives, the quantum kernel is nominally better on F1
+(p=0.037) and significantly worse on faithfulness (p=0.0039); the
+faithfulness effect survives Holm correction across the three secondary
+metrics (adjusted p=0.012), but the F1 effect does not (adjusted p=0.074)
+and does not replicate on the held-out test split (p=0.695, direction
+reversed) — we therefore do not treat F1 as a genuine quantum advantage.
+A geometric-
 difference diagnostic (Huang et al., 2021) on the real task's fitted kernels
 shows why: the quantum kernel's fitted Gram matrix has substantially lower
 effective rank than the classical kernel's (e.g. 41/100 vs. 68/100 on F1),
@@ -45,12 +50,13 @@ mechanism, not a tuning failure or an incomplete search.
      task (not just a synthetic proxy), with enough seeds (n=10) for a
      paired significance test.
   2. A component-metric breakdown showing the quantum kernel does not fail
-     uniformly — it wins on F1, loses on faithfulness, and loses on the
-     combined hypervolume.
+     uniformly — it loses on faithfulness and on the combined hypervolume,
+     and shows a nominal F1 edge that does not survive multiple-comparison
+     correction or held-out replication (§5.2.1).
   3. A geometric-difference/effective-rank diagnostic that explains *why*,
      tying the result back to the qubit-count cap rather than leaving it as
      an unexplained negative result.
-  4. `[TODO once §5.6 lands]` A depth-axis result under a corrected,
+  4. A depth-axis result under a corrected,
      non-degenerate re-uploading circuit (the first attempt hit a
      Clifford-periodicity measurement artifact, documented and fixed —
      §5.6 and Appendix B).
@@ -139,10 +145,10 @@ outcome; no regime was dropped after seeing its result.]`
   trial configs sampled from the completed campaign's own database (no new
   LLM inference), both kernels fit via the identical production
   `fit_independent_gps` path.
-- `[TODO]` Depth sweep: `scripts/run_depth_sweep.py` /
+- Depth sweep: `scripts/run_depth_sweep.py` /
   `scripts/run_depth_qubit_grid.py`, synthetic benchmark, `depth ∈
-  {0,5,10,20}` (grid) / `{1,2,3,4}` (1D) — pending rerun under the fixed
-  circuit (§5.6).
+  {0,5,10,20}` (grid) / `{1,2,3,4}` (1D), run under the fixed
+  circuit (§5.6, Appendix B).
 
 ## 5. Results
 
@@ -174,9 +180,47 @@ Seed-aggregated (mean ± std across n=10 per-seed values):
 | mean faithfulness | −0.01600 | **0.0039** | structured_bo significantly ahead |
 | mean latency | +0.00131 | 0.4922 | no significant difference |
 
-This is not a uniform loss for the quantum kernel: it finds significantly
+This is not a uniform loss for the quantum kernel: it finds nominally
 better-F1 configurations, but significantly worse-faithfulness ones, and the
 faithfulness effect dominates the combined hypervolume outcome.
+
+### 5.2.1 Multiple-Comparison Correction and Held-Out Validation
+
+Table 5.2 tests three secondary metrics against the same optimizer pair, so
+we Holm-correct the three p-values (`scripts/compute_publication_stats.py`,
+`results/main_hotpot_v3/secondary_metrics_holm.csv`):
+
+| metric | raw p | Holm-adjusted p | significant at α=0.05 |
+| --- | --- | --- | --- |
+| mean faithfulness | 0.0039 | **0.0117** | yes |
+| mean F1 | 0.0371 | 0.0742 | no |
+| mean latency | 0.4922 | 0.4922 | no |
+
+Faithfulness survives correction; F1 does not.
+
+Separately, every metric above is measured on the `opt_100` split each
+optimizer actually searched over. We also paired-test the held-out
+`test_300` re-evaluation of each seed/optimizer's final Pareto front
+(`qautollm/evaluation/test_split_eval.py`, `results/main_hotpot_v3/
+heldout_significance.csv`), which neither optimizer ever selected
+configurations against:
+
+| metric | quantum mean | classical mean | p (Wilcoxon) |
+| --- | --- | --- | --- |
+| held-out F1 | 0.3768 | 0.3779 | 0.695 (n.s., quantum slightly *worse*) |
+| held-out faithfulness | 0.1567 | 0.1561 | 0.625 (n.s.) |
+| held-out latency | 0.8346 | 0.8294 | 0.160 (n.s.) |
+
+None of the three held-out metrics differ significantly, and the F1
+direction reverses (quantum marginally worse, not better). Combined with
+the correction above, we read the F1 result as an in-sample,
+uncorrected-only observation, not a genuine effect, and we do not report
+it as a quantum advantage anywhere else in this paper. The faithfulness
+result (structured_bo ahead) and the primary hypervolume result both hold
+up under this scrutiny — Holm correction does not apply to hypervolume
+(the single primary endpoint, not part of the secondary family), and no
+held-out hypervolume re-evaluation exists since hypervolume is defined
+over the optimization trajectory itself, not a per-config held-out score.
 
 ### 5.3 Qubit-Count Scaling
 
@@ -323,22 +367,17 @@ saturate — the classical kernel's much higher effective rank was already
 sufficient, so a quantum kernel that can only match a subset of that rank
 has no room to add value, regardless of depth or qubit count in isolation.
 
-The result is not uniformly negative, though, and the F1-vs-faithfulness
-split (§5.2) is the part that resists an easy explanation. The quantum
-kernel finds significantly *better* configurations on F1 (p=0.037) while
-finding significantly *worse* ones on faithfulness (p=0.0039), and the
-faithfulness effect is both larger in magnitude and more significant,
-which is why it dominates the combined hypervolume. One candidate
-explanation follows directly from the rank finding: a lower-effective-rank
-kernel is a stronger implicit smoothing prior over the search space, and if
-the F1 response surface over this five-group configuration space is smoother
-or lower-frequency than the faithfulness response surface, a rank-limited
-kernel would be expected to track F1's optimum well while missing
-faithfulness's finer structure. We flag this as a plausible mechanism, not a
-demonstrated one — testing it directly (e.g. by comparing the two
-objectives' own kernel-alignment numbers against each other, or by fitting
-a classical kernel deliberately rank-limited to quantum's level) is future
-work rather than a claim this campaign alone can support.
+The result is not uniformly negative on every component metric, though the
+one exception is weaker than it first looks. The quantum kernel finds
+nominally better configurations on F1 (p=0.037) while finding significantly
+*worse* ones on faithfulness (p=0.0039). Unlike faithfulness, the F1 effect
+does not survive Holm correction across the three secondary metrics
+(adjusted p=0.074, §5.2.1) and reverses direction on the held-out `test_300`
+split (quantum marginally worse, p=0.695, n.s.). We therefore treat it as an
+in-sample, uncorrected artifact rather than a real secondary advantage, and
+faithfulness — which does survive both checks — as the only genuine
+component-level effect, dominating the combined hypervolume outcome
+accordingly.
 
 §5.6's depth sweep closes the loop on this reframing rather than opening a
 new one: rerun honestly under the corrected (non-degenerate) circuit, depth
@@ -380,11 +419,12 @@ depth up to 20 re-uploading layers closes the gap. This is not an
 unexplained negative result: a geometric-difference diagnostic computed
 independently of any BO outcome predicts it, tracing the cause to the
 quantum kernel's Brief-mandated qubit cap bounding its effective rank well
-below the classical kernel's. The one genuinely positive, and genuinely
-unexplained, finding is that the quantum kernel searches significantly
-better-F1 configurations even while losing on faithfulness and the combined
-objective — a real effect worth its own follow-up, not an artifact of this
-study's negative headline. `[TODO: one more pass once Introduction/Related
+below the classical kernel's. A nominal F1 advantage for the quantum kernel
+(p=0.037, uncorrected) does not survive Holm correction (adjusted p=0.074)
+or held-out replication (§5.2.1) and should not be read as a genuine
+effect; faithfulness — which does survive both checks — is the only
+component metric where the quantum kernel is significantly, robustly
+behind. `[TODO: one more pass once Introduction/Related
 Work/Limitations are written, to make sure the framing here matches.]`
 
 ---
@@ -398,6 +438,8 @@ Work/Limitations are written, to make sure the framing here matches.]`
   results/main_hotpot_v3/_shared/db.sqlite --output-dir results/main_hotpot_v3
   --seed-stats`
 - Kernel-alignment diagnostic: `python -m scripts.run_kernel_alignment`
+- Secondary-metric Holm correction and held-out (`test_300`) significance
+  (§5.2.1): `python -m scripts.compute_publication_stats`
 - `git log` / commit hash for the exact code version: `[TODO: fill in after
   this session's commit]`.
 

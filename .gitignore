@@ -9,3 +9,10 @@ __pycache__/
 .ipynb_checkpoints/
 data/
 .claude/
+
+# Internal working notes / AI-assistant task instructions and audit
+# scratch output — never intended for the public repo.
+publication_audit/
+*_Recovery_Instructions.md
+*_Publication_Audit.zip
+paper/deliverables/SUMMARY.md

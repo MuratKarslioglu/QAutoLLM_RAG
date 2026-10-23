@@ -1,0 +1,4 @@
+metric,raw_p,holm_adjusted_p,reject_at_0_05
+mean_faithfulness,0.00390625,0.01171875,True
+mean_f1,0.037109375,0.07421875,False
+mean_latency_s,0.4921875,0.4921875,False
